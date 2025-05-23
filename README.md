@@ -1,13 +1,18 @@
-# Install Blesta
+# Blesta bash installer
 install-blesta.sh is a bash script installer. It should be run on a fresh minimal install
 of AlmaLinux 9.
 
 1. Deploy a new minimal install of AlmaLinux 9
 2. Make sure your hostname, e.g. account.domain.com resolves to the server.
-3. Run ./install-blesta.sh as root 
-4. Follow the prompts, when complete you'll have a fresh installation of Blesta
+3. Run ./install-blesta.sh as root and Follow the prompts.
 
-# What the Script Does
+To run:
+````
+dnf install curl -y
+curl https://raw.githubusercontent.com/blesta/install-blesta/main/install-blesta.sh | sh -s -- --verbose
+````
+
+# What does the script do?
 - Installs all dependencies
 - Installs Apache, PHP 8.2, and MariaDB to recommended requirements.
 - Fetches a Let's Encrypt certificate via Certbot
