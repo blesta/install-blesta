@@ -9,7 +9,9 @@ of AlmaLinux 9.
 To run:
 ````
 dnf install curl -y
-curl https://raw.githubusercontent.com/blesta/install-blesta/main/install-blesta.sh | sh -s -- --verbose
+curl -o install-blesta.sh https://raw.githubusercontent.com/blesta/install-blesta/main/install-blesta.sh
+chmod +x install-blesta.sh
+./install-blesta.sh
 ````
 
 # What does the script do?
