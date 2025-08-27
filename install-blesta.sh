@@ -2,7 +2,7 @@
 
 # Check if the script is run with root privileges
 if [ "$EUID" -ne 0 ]
-  then echo "Please run as root on a fresh minimal install of Almalinux 8 or 9."
+  then echo "Please run as root on a fresh minimal install of Almalinux 8, 9, or 10."
   exit
 fi
 
@@ -19,7 +19,7 @@ print_banner() {
     echo "####################################################################"
     echo "#                                                                  #"
     echo "#         WARNING: This script should ONLY be run on               #"
-    echo "#         a FRESH MINIMAL INSTALLATION of AlmaLinux 8 or 9!        #"
+    echo "#         a FRESH MINIMAL INSTALLATION of AlmaLinux 8, 9, or 10!   #"
     echo "#                                                                  #"
     echo "####################################################################"
     echo -e "\e[0m"  # Reset color
@@ -28,16 +28,19 @@ print_banner() {
 # Call the function to display the banner
 print_banner
 
-# For Almalinux 8 or 9 only
+# For Almalinux 8, 9, or 10 only
 almarelease=$(cat /etc/almalinux-release)
-if [[ $almarelease =~ 'release 9' ]]
+if [[ $almarelease =~ 'release 10' ]]
+then
+  echo 'Running Almalinux 10'
+elif [[ $almarelease =~ 'release 9' ]]
 then
   echo 'Running Almalinux 9'
 elif  [[ $almarelease =~ 'release 8' ]]
 then
   echo 'Running Almalinux 8'
 else
-  echo 'Not running Almalinux 8 or 9, exiting...'
+  echo 'Not running Almalinux 8, 9, or 10, exiting...'
   exit 1
 fi
 
