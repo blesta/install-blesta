@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 
+# The whole script runs inside main(), called on the last line. When piped
+# (curl | bash), bash reads the script source from stdin as it executes;
+# wrapping the body in a function makes bash parse it all up front, so the
+# exec < /dev/tty below can't cut the parser off from the rest of the
+# script, and a partially-downloaded script fails to parse instead of
+# running half-way.
+main() {
+
 # When piped (curl | bash), stdin is the script itself — reattach to the
 # terminal so interactive prompts work instead of hitting EOF and looping.
 if [ ! -t 0 ]; then
-    if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+    # Test-open /dev/tty in a subshell: it can exist yet fail to open when
+    # there is no controlling terminal (CI, cron, some containers).
+    if (exec < /dev/tty) 2>/dev/null; then
         exec < /dev/tty
     else
         echo "Error: This installer is interactive and requires a terminal." >&2
@@ -415,5 +425,11 @@ echo -e "\e[32mVisit https://$hostname/admin/ to login to Blesta.\e[0m"
 echo -e "\e[32mHere are your credentials, save them somewhere safe.\e[0m"
 echo -e "\e[32mUsername: admin\e[0m"
 echo -e "\e[32mPassword: $blestaadminpass\e[0m"
+
+}
+
+# Call and exit on one line: after stdin is redirected to the terminal,
+# bash must never come back to stdin looking for more script to run.
+main "$@"; exit $?
 
 
