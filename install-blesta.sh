@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 
+# When piped (curl | bash), stdin is the script itself — reattach to the
+# terminal so interactive prompts work instead of hitting EOF and looping.
+if [ ! -t 0 ]; then
+    if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+        exec < /dev/tty
+    else
+        echo "Error: This installer is interactive and requires a terminal." >&2
+        echo "No TTY is available. Download the script and run it directly:" >&2
+        echo "  curl -fsSLO https://raw.githubusercontent.com/blesta/install-blesta/main/install-blesta.sh && bash install-blesta.sh" >&2
+        exit 1
+    fi
+fi
+
 # Check if the script is run with root privileges
 if [ "$EUID" -ne 0 ]
   then echo "Please run as root on a fresh minimal install of Almalinux 8, 9, or 10."
@@ -84,7 +97,7 @@ validate_fqdn() {
 while true; do
     # Prompt for Hostname (blue color)
     echo -e "\e[32mPlease enter the Hostname (e.g. account.domain.com) It MUST RESOLVE to this server!:\e[0m"
-    read hostname
+    read hostname || { echo "No input available (EOF). Exiting." >&2; exit 1; }
 
     # Validate hostname is not empty
     if ! validate_not_empty "$hostname" "Hostname"; then
@@ -106,7 +119,7 @@ echo -e "\e[32mThe following information is for your first Staff Account:\e[0m"
 # Prompt for Email Address (blue color)
 while true; do
     echo -e "\e[32mPlease enter your Email Address:\e[0m"
-    read email_address
+    read email_address || { echo "No input available (EOF). Exiting." >&2; exit 1; }
     validate_not_empty "$email_address" "Email Address" || continue
     validate_email "$email_address" || continue
     break
