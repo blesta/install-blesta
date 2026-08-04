@@ -151,22 +151,34 @@ fi
 
 # No selinux
 setenforce 0
-sed -c -i "s/\SELINUX=.*/SELINUX=disabled/" /etc/sysconfig/selinux
+# Target the real config file (/etc/sysconfig/selinux is a symlink to it);
+# the previous `sed -c` form was an invalid GNU sed option and never persisted
+# the change, so SELinux returned to enforcing on reboot.
+sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
 
-# Disable firewalld
-if systemctl is-active --quiet firewalld; then
-    echo "Firewalld is running. Stopping and disabling it."
-    systemctl stop firewalld
-    systemctl disable firewalld
-else
-    echo "Firewalld is not running."
-fi
+# Configure firewalld: allow SSH/HTTP/HTTPS ingress, everything egress.
+# Keeping 3306 (MariaDB) and 6379 (Redis/Valkey) closed guarantees neither
+# is reachable externally. Must run before certbot (HTTP-01 needs port 80).
+echo "Configuring firewalld..."
+dnf install firewalld -y
+systemctl enable firewalld
+systemctl start firewalld
+firewall-cmd --permanent --zone=public --add-service=http
+firewall-cmd --permanent --zone=public --add-service=https
+firewall-cmd --permanent --zone=public --add-service=ssh
+firewall-cmd --permanent --zone=public --remove-service=cockpit || true
+firewall-cmd --permanent --zone=public --remove-service=dhcpv6-client || true
+firewall-cmd --reload
 
 # Update to the latest release
 echo "Updating system packages..."
 dnf update -y
 dnf install epel-release -y
-dnf install htop iftop nano wget zip unzip -y
+dnf install htop iftop nano wget zip unzip rsync which tar util-linux cronie -y
+
+# Make sure the cron daemon runs now and after reboot (minimal cloud images
+# may not ship cronie); Blesta's cron job depends on it
+systemctl enable --now crond
 
 # Create 'blesta' user
 echo "Creating user 'blesta'..."
@@ -215,9 +227,34 @@ EOF
 # Install MariaDB
 dnf install mariadb-server mariadb -y
 
+# Install Redis (EL8/9) or Valkey (EL10) for Blesta caching. Both bind to
+# 127.0.0.1 with protected-mode on by default, so no config changes are
+# needed for localhost-only operation.
+if [[ $almarelease =~ 'release 10' ]]; then
+    echo "Installing Valkey..."
+    dnf install valkey -y
+    cache_service=valkey
+else
+    echo "Installing Redis..."
+    # EL8's default module stream is redis:5; enable redis:6 for parity with
+    # EL9 (a no-op failure on EL9, which has no redis module)
+    if [[ $almarelease =~ 'release 8' ]]; then
+        dnf module enable redis:6 -y
+    fi
+    dnf install redis -y
+    cache_service=redis
+fi
+systemctl enable "$cache_service"
+systemctl start "$cache_service"
+
 # Install PHP 8.2
 . /etc/os-release && dnf -y install https://rpms.remirepo.net/enterprise/remi-release-$(rpm -E %$ID).rpm && dnf clean all
-dnf install php82-php-{cli,pdo,fpm,zip,gd,xml,mysqlnd,opcache,mbstring,bcmath,pear,gmp,intl,imap,pecl-mailparse,ioncube-loader,soap} -y
+dnf install php82-php-{cli,pdo,fpm,zip,gd,xml,mysqlnd,opcache,mbstring,bcmath,pear,gmp,intl,imap,pecl-mailparse,ioncube-loader,soap,pecl-redis6} -y
+
+# Provide a bare `php` on PATH. Blesta's background upgrader falls back to
+# `php` when PHP_BINARY is the FPM binary; the SCL install only provides
+# /usr/bin/php82, so without this symlink the background upgrade cannot start.
+ln -sf /usr/bin/php82 /usr/local/bin/php
 
 # Update php.ini
 export PHP_INI_PATH=/etc/opt/remi/php82/php.ini
@@ -236,6 +273,12 @@ sed -i 's/group = apache/group = blesta/' $PHP_WWW_PATH
 sed -i 's/listen.acl_users = apache/;listen.acl_users = apache/' $PHP_WWW_PATH
 sed -i 's/;listen.owner = nobody/listen.owner = blesta/' $PHP_WWW_PATH
 sed -i 's/;listen.group = nobody/listen.group = blesta/' $PHP_WWW_PATH
+# Give FPM workers a real PATH. FPM clears the environment by default, which
+# breaks exec()'d commands (e.g. Blesta's upgrade dependency checks via `which`).
+sed -i 's~^;env\[PATH\].*~env[PATH] = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin~' $PHP_WWW_PATH
+# Fallback: if the packaged www.conf had no commented env[PATH] line to
+# uncomment, append one so FPM always gets a PATH
+grep -q '^env\[PATH\]' $PHP_WWW_PATH || echo 'env[PATH] = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' >> $PHP_WWW_PATH
 
 # Update httpd.conf
 export HTTP_CFG_PATH=/etc/httpd/conf/httpd.conf
@@ -244,19 +287,22 @@ sed -i 's/Group apache/Group blesta/' $HTTP_CFG_PATH
 
 systemctl enable httpd
 systemctl enable mariadb
+systemctl enable php82-php-fpm
 systemctl start httpd
 systemctl start mariadb
 systemctl restart php82-php-fpm
 
 # Obtain Let's Encrypt certificate
 echo "Obtaining Let's Encrypt certificate for $hostname..."
-certbot --apache -d "$hostname" --non-interactive --agree-tos --email "webmaster@$hostname" || {
+certbot --apache -d "$hostname" --non-interactive --agree-tos --email "$email_address" || {
     echo "Certbot failed. Check /var/log/letsencrypt/letsencrypt.log for details."
     exit 1
 }
 
-# Ensure the Let's Encrypt renewal cron job is set up
-echo "Setting up Let's Encrypt certificate renewal..."
+# Enable and start automatic certificate renewal (EPEL certbot uses a
+# systemd timer; package install enables it via preset but does not start it)
+echo "Enabling automatic Let's Encrypt certificate renewal..."
+systemctl enable --now certbot-renew.timer
 certbot renew --dry-run
 
 # Restart Apache to apply changes
@@ -288,6 +334,18 @@ echo "MariaDB secured with root password."
 
 # Download the latest version of Blesta
 su - blesta -c "cd /home/blesta/; mkdir /home/blesta/tmp/; cd /home/blesta/tmp/; wget https://www.blesta.com/latest.zip; unzip latest.zip; mv uploads /home/blesta/; mv blesta/* /home/blesta/public_html/; mv blesta/.htaccess /home/blesta/public_html/;"
+
+# Enable the Redis cache block in the config template before install runs, so
+# the generated config/blesta.php starts with Redis caching enabled. The
+# defaults (127.0.0.1:6379, no password) match the Redis/Valkey install above.
+# Blesta falls back silently to file caching if Redis is unreachable.
+# The block only exists in Blesta 6.0+ templates; warn instead of silently
+# doing nothing if an older release was downloaded.
+if grep -q "Configure::set('Blesta.redis'" /home/blesta/public_html/config/blesta-new.php; then
+    sed -i "/Configure::set('Blesta.redis'/,/^\/\/ \]);/ s|^// ||" /home/blesta/public_html/config/blesta-new.php
+else
+    echo "WARNING: No Blesta.redis block found in config template (Blesta 6.0+ only); Redis caching NOT enabled."
+fi
 
 # Initiate install of Blesta
 echo "Creating MySQL database user and password for Blesta..."
@@ -326,7 +384,13 @@ else
 fi
 
 # Execute the installation command with or without license key option
-su - blesta -c "cd /home/blesta/public_html/; /usr/bin/php82 /home/blesta/public_html/index.php install -dbhost localhost -dbport 3306 -dbname blesta -dbuser blesta -dbpass $mysqlblestapass -hostname $hostname -docroot /home/blesta/public_html/ -domain $hostname $license_key_option -firstname $first_name -lastname $last_name -email $email_address -username admin -password $blestaadminpass"
+su - blesta -c "cd /home/blesta/public_html/; /usr/bin/php82 /home/blesta/public_html/index.php install -dbhost localhost -dbport 3306 -dbname blesta -dbuser blesta -dbpass $mysqlblestapass -hostname $hostname -docroot /home/blesta/public_html/ -domain $hostname $license_key_option -firstname \"$first_name\" -lastname \"$last_name\" -email $email_address -username admin -password $blestaadminpass"
+
+# Point Blesta's temp_dir outside systemd PrivateTmp. php-fpm runs with
+# PrivateTmp=true, so /tmp is a private namespace: upgrade artifacts written
+# there are invisible from SSH and destroyed on an FPM restart.
+echo "Setting Blesta temp directory to /home/blesta/tmp/..."
+mysql -u root -p"$mysqlrootpass" blesta -e "UPDATE settings SET value='/home/blesta/tmp/' WHERE \`key\`='temp_dir';"
 
 echo "Creating a cron job"
 # * * * * * /usr/bin/php82 -q /home/blesta/public_html/index.php cron > /dev/null 2>&1

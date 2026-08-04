@@ -2,7 +2,7 @@
 install-blesta.sh is a bash script installer. It should be run on a fresh minimal install
 of AlmaLinux 8, 9, or 10.
 
-1. Deploy a new minimal install of AlmaLinux 9, or 10
+1. Deploy a new minimal install of AlmaLinux 8, 9, or 10
 2. Make sure your hostname, e.g. account.domain.com resolves to the server.
 3. Run ./install-blesta.sh as root and Follow the prompts.
 
@@ -17,7 +17,9 @@ chmod +x install-blesta.sh
 # What does the script do?
 - Installs all dependencies
 - Installs Apache, PHP 8.2, and MariaDB to recommended requirements.
-- Fetches a Let's Encrypt certificate via Certbot
+- Installs Redis (AlmaLinux 8/9) or Valkey (AlmaLinux 10) listening on localhost only, and enables Blesta's Redis caching
+- Configures firewalld to allow only SSH (22), HTTP (80), and HTTPS (443) ingress; all egress is allowed. MariaDB and Redis/Valkey are not reachable externally.
+- Fetches a Let's Encrypt certificate via Certbot and enables automatic renewal
 - Installs Blesta and sets a cron job
 
 # Final Output
